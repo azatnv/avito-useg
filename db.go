@@ -1,14 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -35,6 +31,7 @@ const deleteSegmentSQL = "DELETE FROM segments WHERE name=($1)"
 
 const selectUserSQL = "SELECT id FROM users WHERE id=($1)"
 const createUserSQL = "INSERT INTO users(id) VALUES ($1)"
+const selectAllUsersSQL = "SELECT id FROM users"
 
 const addUserSegmentsSQL = "INSERT INTO user2seg(u_id, s_id, date_add, date_end) VALUES ($1, $2, $3, $4)"
 const deleteUserSegmentsSQL = "DELETE FROM user2seg WHERE u_id=($1) and s_id=($2)"
@@ -43,78 +40,32 @@ const selectUserSegmentsSQL = `
 	JOIN segments as s ON u2s.s_id = s.id 
 	WHERE u_id=($1)`
 
-func execSqlOnSegments(w http.ResponseWriter, r *http.Request, stm string) error {
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			return
-		}
-	}(r.Body)
-	var data bytes.Buffer
-	if _, err := io.Copy(&data, r.Body); err != nil {
-		return errors.New(fmt.Sprintf("JSON reading failed: %s", err))
-	}
-
-	var s Segment
-	if err := json.Unmarshal(data.Bytes(), &s); err != nil {
-		return errors.New(fmt.Sprintf("JSON unmarshaling failed: %s", err))
-	}
-	if s.Name == "" {
-		return errors.New("there is no segment")
-	}
-
-	ctx := r.Context()
-	if _, err := db.ExecContext(ctx, stm, strings.ToUpper(s.Name)); err != nil {
-		return err
-	}
-
-	w.WriteHeader(http.StatusOK)
-	return nil
+func createSegment(ctx context.Context, conn *sql.Conn, name string) (err error) {
+	_, err = conn.ExecContext(ctx, createSegmentSQL, strings.ToUpper(name))
+	return
 }
 
-func addUserSegments(w http.ResponseWriter, r *http.Request) error {
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			return
-		}
-	}(r.Body)
-	var data bytes.Buffer
-	if _, err := io.Copy(&data, r.Body); err != nil {
-		return errors.New(fmt.Sprintf("JSON reading failed: %s", err))
-	}
-
-	var us UserSegments
-	if err := json.Unmarshal(data.Bytes(), &us); err != nil {
-		return errors.New(fmt.Sprintf("JSON unmarshaling failed: %s", err))
-	}
-	if us.DateEnd.IsZero() {
-		us.DateEnd = time.Date(9999, 0, 0, 0, 0, 0, 0, time.UTC)
-	}
-	if us.UserID == 0 || us.Segments == nil {
-		return errors.New("bad request")
-	}
-
-	// common connection
-	ctx := r.Context()
-	conn, err := db.Conn(ctx)
+func checkSegment(ctx context.Context, conn *sql.Conn, name string) (int, bool, error) {
+	segmentID, err := selectSegmentID(ctx, conn, name)
 	if err != nil {
-		return err
-	}
-	defer func(conn *sql.Conn) {
-		err := conn.Close()
-		if err != nil {
-			return
+		if errors.Is(err, sql.ErrNoRows) {
+			return segmentID, false, nil
 		}
-	}(conn)
-
-	// create new user if it doesn't exist
-	err = checkOrCreateUser(ctx, conn, us.UserID)
-	if err != nil {
-		return err
+		return segmentID, false, err
 	}
+	return segmentID, true, nil
+}
 
-	// add all segments for that user
+func selectSegmentID(ctx context.Context, conn *sql.Conn, name string) (int, error) {
+	var segmentID int
+	err := conn.QueryRowContext(ctx, selectSegmentSQL, strings.ToUpper(name)).Scan(&segmentID)
+	if err != nil {
+		return -1, err
+	}
+	return segmentID, nil
+}
+
+func assignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, uids []int) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -126,7 +77,36 @@ func addUserSegments(w http.ResponseWriter, r *http.Request) error {
 		}
 	}(tx)
 
-	// if at least one segment does not exist or any unique error then the request is rejected
+	segmentID, err := selectSegmentID(ctx, conn, name)
+	if err != nil {
+		return err
+	}
+
+	for _, uid := range uids {
+		_, err = tx.ExecContext(ctx, addUserSegmentsSQL, uid, segmentID, time.Now(), infinity)
+		if err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	return
+}
+
+func assignSegmentsForUser(ctx context.Context, conn *sql.Conn, us UserSegments) (err error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func(tx *sql.Tx) {
+		err := tx.Rollback()
+		if err != nil {
+			return
+		}
+	}(tx)
+
 	for _, s := range us.Segments {
 		segmentID, b, err := checkSegment(ctx, conn, s.Name)
 		if err != nil {
@@ -144,21 +124,55 @@ func addUserSegments(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-
-	w.WriteHeader(http.StatusOK)
-	return nil
+	return
 }
 
-func checkSegment(ctx context.Context, conn *sql.Conn, name string) (int, bool, error) {
-	var segmentID int
-	err := conn.QueryRowContext(ctx, selectSegmentSQL, strings.ToUpper(name)).Scan(&segmentID)
+func deleteUserSegments(ctx context.Context, conn *sql.Conn, us UserSegments) (err error) {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return segmentID, false, nil
-		}
-		return segmentID, false, err
+		return err
 	}
-	return segmentID, true, nil
+	defer func(tx *sql.Tx) {
+		err := tx.Rollback()
+		if err != nil {
+			return
+		}
+	}(tx)
+
+	for _, s := range us.Segments {
+		segmentID, b, err := checkSegment(ctx, conn, s.Name)
+		if err != nil {
+			return err
+		}
+		if !b {
+			continue
+		}
+		_, err = tx.ExecContext(ctx, deleteUserSegmentsSQL, us.UserID, segmentID)
+		if err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	return
+}
+
+func selectUserSegments(ctx context.Context, conn *sql.Conn, uid int) (res []Segment, err error) {
+	rows, err := conn.QueryContext(ctx, selectUserSegmentsSQL, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var s Segment
+		if err := rows.Scan(&s.Name); err != nil {
+			return nil, err
+		}
+		res = append(res, s)
+	}
+	return
 }
 
 func checkOrCreateUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
@@ -191,127 +205,18 @@ func createUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
 	return
 }
 
-func getUserSegments(w http.ResponseWriter, r *http.Request) error {
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			return
-		}
-	}(r.Body)
-	var data bytes.Buffer
-	if _, err := io.Copy(&data, r.Body); err != nil {
-		return errors.New(fmt.Sprintf("JSON reading failed: %s", err))
-	}
-
-	var u User
-	if err := json.Unmarshal(data.Bytes(), &u); err != nil {
-		return errors.New(fmt.Sprintf("JSON unmarshaling failed: %s", err))
-	}
-	if u.UserID == 0 {
-		return errors.New("bad request")
-	}
-
-	ctx := r.Context()
-	rows, err := db.QueryContext(ctx, selectUserSegmentsSQL, u.UserID)
+func selectAllUsers(ctx context.Context, conn *sql.Conn) (ids []int, err error) {
+	rows, err := conn.QueryContext(ctx, selectAllUsersSQL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	var a []Segment
 	for rows.Next() {
-		var s Segment
-		if err := rows.Scan(&s.Name); err != nil {
-			return err
+		var i int
+		if err = rows.Scan(&i); err != nil {
+			return nil, err
 		}
-		a = append(a, s)
+		ids = append(ids, i)
 	}
-
-	aBytes, err := json.Marshal(a)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(aBytes)
-	if err != nil {
-		return err
-	}
-	w.WriteHeader(http.StatusOK)
-	return nil
-}
-
-func deleteUserSegments(w http.ResponseWriter, r *http.Request) error {
-	// if user exists then delete his segments
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			return
-		}
-	}(r.Body)
-	var data bytes.Buffer
-	if _, err := io.Copy(&data, r.Body); err != nil {
-		return errors.New(fmt.Sprintf("JSON reading failed: %s", err))
-	}
-
-	var us UserSegments
-	if err := json.Unmarshal(data.Bytes(), &us); err != nil {
-		return errors.New(fmt.Sprintf("JSON unmarshaling failed: %s", err))
-	}
-	if us.UserID == 0 || us.Segments == nil {
-		return errors.New("bad request")
-	}
-
-	// common connection
-	ctx := r.Context()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer func(conn *sql.Conn) {
-		err := conn.Close()
-		if err != nil {
-			return
-		}
-	}(conn)
-
-	// check user
-	b, err := checkUser(ctx, conn, us.UserID)
-	if err != nil {
-		return err
-	}
-	if !b {
-		return errors.New(fmt.Sprintf("there is no such user %d", us.UserID))
-	}
-
-	// remove existing segments for that user
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func(tx *sql.Tx) {
-		err := tx.Rollback()
-		if err != nil {
-			return
-		}
-	}(tx)
-
-	// unknown segments are skipped
-	for _, s := range us.Segments {
-		segmentID, b, err := checkSegment(ctx, conn, s.Name)
-		if err != nil {
-			return err
-		}
-		if !b {
-			continue
-		}
-		_, err = tx.ExecContext(ctx, deleteUserSegmentsSQL, us.UserID, segmentID)
-		if err != nil {
-			return err
-		}
-	}
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-
-	w.WriteHeader(http.StatusOK)
-	return nil
+	return ids, err
 }
