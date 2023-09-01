@@ -1,6 +1,7 @@
 package main
 
 import (
+	"avito-useg/handlers"
 	"database/sql"
 	"fmt"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -18,8 +19,7 @@ func main() {
 	u := os.Getenv("POSTGRES_USER")
 	p := os.Getenv("POSTGRES_PASSWORD")
 	dbName := os.Getenv("POSTGRES_DB")
-
-	db, err = sql.Open("pgx", fmt.Sprintf("postgres://%s:%s@localhost:5432/%s", u, p, dbName))
+	h.DB, err = sql.Open("pgx", fmt.Sprintf("postgres://%s:%s@localhost:5432/%s", u, p, dbName))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -28,15 +28,15 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-	}(db)
+	}(h.DB)
 
 	mux := http.NewServeMux()
 
-	mux.Handle("/users", wrapError(usersHandler))
-	mux.Handle("/segments", wrapError(segmentsHandler))
-	mux.Handle("/users/segments", wrapError(userSegmentsHandler))
+	mux.Handle("/users", h.WrapError(h.UsersHandler))
+	mux.Handle("/segments", h.WrapError(h.SegmentsHandler))
+	mux.Handle("/users/segments", h.WrapError(h.UserSegmentsHandler))
 
-	err = http.ListenAndServe(":80", http.TimeoutHandler(mux, timeout, "time limit exceeded"))
+	err = http.ListenAndServe(":80", http.TimeoutHandler(mux, h.Timeout, "time limit exceeded"))
 	if err != nil {
 		log.Fatal("server error")
 	}

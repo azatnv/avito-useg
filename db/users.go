@@ -1,33 +1,14 @@
-package main
+package db
 
 import (
+	"avito-useg/handlers"
+	"avito-useg/models"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
-
-var db *sql.DB
-
-type User struct {
-	UserID int `json:"id"`
-}
-
-type Segment struct {
-	Name string `json:"name"`
-}
-
-type UserSegments struct {
-	User
-	Segments []Segment `json:"segments"`
-	DateEnd  time.Time `json:"date_end"`
-}
-
-const selectSegmentSQL = "SELECT id FROM segments WHERE name=($1)"
-const createSegmentSQL = "INSERT INTO segments(name) VALUES ($1)"
-const deleteSegmentSQL = "DELETE FROM segments WHERE name=($1)"
 
 const selectUserSQL = "SELECT id FROM users WHERE id=($1)"
 const createUserSQL = "INSERT INTO users(id) VALUES ($1)"
@@ -40,32 +21,7 @@ const selectUserSegmentsSQL = `
 	JOIN segments as s ON u2s.s_id = s.id 
 	WHERE u_id=($1)`
 
-func createSegment(ctx context.Context, conn *sql.Conn, name string) (err error) {
-	_, err = conn.ExecContext(ctx, createSegmentSQL, strings.ToUpper(name))
-	return
-}
-
-func checkSegment(ctx context.Context, conn *sql.Conn, name string) (int, bool, error) {
-	segmentID, err := selectSegmentID(ctx, conn, name)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return segmentID, false, nil
-		}
-		return segmentID, false, err
-	}
-	return segmentID, true, nil
-}
-
-func selectSegmentID(ctx context.Context, conn *sql.Conn, name string) (int, error) {
-	var segmentID int
-	err := conn.QueryRowContext(ctx, selectSegmentSQL, strings.ToUpper(name)).Scan(&segmentID)
-	if err != nil {
-		return -1, err
-	}
-	return segmentID, nil
-}
-
-func assignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, uids []int) (err error) {
+func AssignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, ids []int) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -82,8 +38,8 @@ func assignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, uid
 		return err
 	}
 
-	for _, uid := range uids {
-		_, err = tx.ExecContext(ctx, addUserSegmentsSQL, uid, segmentID, time.Now(), infinity)
+	for _, uid := range ids {
+		_, err = tx.ExecContext(ctx, addUserSegmentsSQL, uid, segmentID, time.Now(), h.Infinity)
 		if err != nil {
 			return err
 		}
@@ -95,7 +51,7 @@ func assignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, uid
 	return
 }
 
-func assignSegmentsForUser(ctx context.Context, conn *sql.Conn, us UserSegments) (err error) {
+func AssignSegmentsForUser(ctx context.Context, conn *sql.Conn, us m.UserSegments) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -127,7 +83,7 @@ func assignSegmentsForUser(ctx context.Context, conn *sql.Conn, us UserSegments)
 	return
 }
 
-func deleteUserSegments(ctx context.Context, conn *sql.Conn, us UserSegments) (err error) {
+func DeleteUserSegments(ctx context.Context, conn *sql.Conn, us m.UserSegments) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -159,14 +115,14 @@ func deleteUserSegments(ctx context.Context, conn *sql.Conn, us UserSegments) (e
 	return
 }
 
-func selectUserSegments(ctx context.Context, conn *sql.Conn, uid int) (res []Segment, err error) {
+func SelectUserSegments(ctx context.Context, conn *sql.Conn, uid int) (res []m.Segment, err error) {
 	rows, err := conn.QueryContext(ctx, selectUserSegmentsSQL, uid)
 	if err != nil {
 		return nil, err
 	}
 
 	for rows.Next() {
-		var s Segment
+		var s m.Segment
 		if err := rows.Scan(&s.Name); err != nil {
 			return nil, err
 		}
@@ -175,20 +131,20 @@ func selectUserSegments(ctx context.Context, conn *sql.Conn, uid int) (res []Seg
 	return
 }
 
-func checkOrCreateUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
-	b, err := checkUser(ctx, conn, userID)
+func CheckOrCreateUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
+	b, err := CheckUser(ctx, conn, userID)
 	if err != nil {
 		return err
 	}
 	if !b {
-		if err = createUser(ctx, conn, userID); err != nil {
+		if err = CreateUser(ctx, conn, userID); err != nil {
 			return err
 		}
 	}
 	return
 }
 
-func checkUser(ctx context.Context, conn *sql.Conn, userID int) (bool, error) {
+func CheckUser(ctx context.Context, conn *sql.Conn, userID int) (bool, error) {
 	var selectedID int
 	err := conn.QueryRowContext(ctx, selectUserSQL, userID).Scan(&selectedID)
 	if err != nil {
@@ -200,12 +156,12 @@ func checkUser(ctx context.Context, conn *sql.Conn, userID int) (bool, error) {
 	return true, nil
 }
 
-func createUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
+func CreateUser(ctx context.Context, conn *sql.Conn, userID int) (err error) {
 	_, err = conn.ExecContext(ctx, createUserSQL, userID)
 	return
 }
 
-func selectAllUsers(ctx context.Context, conn *sql.Conn) (ids []int, err error) {
+func SelectAllUsers(ctx context.Context, conn *sql.Conn) (ids []int, err error) {
 	rows, err := conn.QueryContext(ctx, selectAllUsersSQL)
 	if err != nil {
 		return nil, err
