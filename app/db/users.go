@@ -1,7 +1,6 @@
 package db
 
 import (
-	"avito-useg/handlers"
 	"avito-useg/models"
 	"context"
 	"database/sql"
@@ -9,6 +8,8 @@ import (
 	"fmt"
 	"time"
 )
+
+var infinity = time.Date(9999, 0, 0, 0, 0, 0, 0, time.UTC)
 
 const selectUserSQL = "SELECT id FROM users WHERE id=($1)"
 const createUserSQL = "INSERT INTO users(id) VALUES ($1)"
@@ -39,7 +40,7 @@ func AssignSegmentForUsers(ctx context.Context, conn *sql.Conn, name string, ids
 	}
 
 	for _, uid := range ids {
-		_, err = tx.ExecContext(ctx, addUserSegmentsSQL, uid, segmentID, time.Now(), h.Infinity)
+		_, err = tx.ExecContext(ctx, addUserSegmentsSQL, uid, segmentID, time.Now(), infinity)
 		if err != nil {
 			return err
 		}

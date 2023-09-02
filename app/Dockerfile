@@ -1,6 +1,6 @@
 FROM golang:1.20-alpine
 
-COPY . /app
+COPY .. /app
 
 WORKDIR /app
 

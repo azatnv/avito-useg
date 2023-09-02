@@ -65,7 +65,7 @@ func createUserSegmentsHandler(w http.ResponseWriter, r *http.Request) error {
 		return errors.New(fmt.Sprintf("JSON unmarshaling failed: %s", err))
 	}
 	if us.DateEnd.IsZero() {
-		us.DateEnd = Infinity
+		us.DateEnd = infinity
 	}
 	if us.UserID == 0 || us.Segments == nil {
 		return errors.New("bad request")

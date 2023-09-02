@@ -10,7 +10,7 @@ import (
 var DB *sql.DB
 
 var Timeout = time.Minute
-var Infinity = time.Date(9999, 0, 0, 0, 0, 0, 0, time.UTC)
+var infinity = time.Date(9999, 0, 0, 0, 0, 0, 0, time.UTC)
 
 func UsersHandler(w http.ResponseWriter, r *http.Request) (err error) {
 	switch r.Method {

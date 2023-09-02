@@ -15,9 +15,9 @@ services:
 #    networks:
 #      - backend-net
 
-#  service:
+#  app:
 #    container_name: avito_useg_app
-#    build: ./
+#    build: ./app
 #    networks:
 #      - backend-net
 
