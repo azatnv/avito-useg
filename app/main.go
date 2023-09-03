@@ -19,7 +19,7 @@ func main() {
 	u := os.Getenv("POSTGRES_USER")
 	p := os.Getenv("POSTGRES_PASSWORD")
 	dbName := os.Getenv("POSTGRES_DB")
-	h.DB, err = sql.Open("pgx", fmt.Sprintf("postgres://%s:%s@localhost:5432/%s", u, p, dbName))
+	h.DB, err = sql.Open("pgx", fmt.Sprintf("postgres://%s:%s@db:5432/%s", u, p, dbName))
 	if err != nil {
 		log.Fatal(err)
 	}

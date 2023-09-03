@@ -6,24 +6,28 @@ services:
     build:
       dockerfile: ./Dockerfile.db
     env_file:
-      - .env.db
+      - app/.env.db
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d
-#    networks:
-#      - backend-net
+    networks:
+      - backend-net
 
-#  app:
-#    container_name: avito_useg_app
-#    build: ./app
-#    networks:
-#      - backend-net
+  app:
+    container_name: avito_useg_app
+    build: ./app
+    ports:
+      - "80:80"
+    expose:
+      - 80
+    networks:
+      - backend-net
 
 volumes:
   pg_data:
 
-#networks:
-#  backend-net:
-#    driver: bridge
+networks:
+  backend-net:
+    driver: bridge
